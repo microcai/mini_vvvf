@@ -50,14 +50,21 @@ void doTarget(char* cmd)
 
 TaskHandle_t Task_idle;
 
-//Task1code: blinks an LED every 1000 ms
 static void Task_idle_code( void * pvParameters )
 {
   for(;;){
     vTaskDelay(10);
     command.run();
+    esp_task_wdt_reset();
     vTaskDelay(10);
-    Serial.printf("current is %f\t %f\n", current_sense.getDCCurrent(), current_sense.getPhaseCurrents().a);
+  }
+}
+
+static void Task_print_status_code( void * pvParameters )
+{
+  for(;;){
+    vTaskDelay(1000);
+    Serial.printf("current is %f \t power req: %f \t volt: %f \n", current_sense.getPhaseCurrents(), target_hz, motor.voltage_limit);
     esp_task_wdt_reset();
   }
 }
@@ -113,16 +120,23 @@ void setup()
 
   std::thread().native_handle();
 
-  xTaskGetIdleTaskHandle();
-
   xTaskCreatePinnedToCore(
                     Task_idle_code,   /* Task function. */
                     "idle_task",     /* name of task. */
                     10000,       /* Stack size of task */
                     NULL,        /* parameter of the task */
-                    1,           /* priority of the task */
+                    2,           /* priority of the task */
                     &Task_idle,      /* Task handle to keep track of created task */
                     0);          /* pin task to core 0 */
+
+  xTaskCreatePinnedToCore(
+                    Task_print_status_code,   /* Task function. */
+                    "Task_print_status",     /* name of task. */
+                    10000,       /* Stack size of task */
+                    NULL,        /* parameter of the task */
+                    1,           /* priority of the task */
+                    &Task_idle,      /* Task handle to keep track of created task */
+                    0);            /* pin task to core 0 */
 
   _delay(100);
 }
