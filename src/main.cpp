@@ -1,8 +1,19 @@
 
+#include "BluetoothSerial.h"
 #include <SimpleFOC.h>
 #include <esp_sleep.h>
 #include <esp_task_wdt.h>
 #include <thread>
+
+#if !defined(CONFIG_BT_ENABLED) || !defined(CONFIG_BLUEDROID_ENABLED)
+#error Bluetooth is not enabled! Please run `make menuconfig` to and enable it
+#endif
+
+#if !defined(CONFIG_BT_SPP_ENABLED)
+#error Serial Bluetooth not available or not enabled. It is only available for the ESP32 chip.
+#endif
+
+BluetoothSerial SerialBT;
 
 #define IOUTA 34
 #define IOUTB 35
@@ -27,10 +38,47 @@ float motor_freq = 60;
 
 // instantiate the commander
 Commander command = Commander(Serial);
-void doTarget(char* cmd)
+Commander commandBT = Commander(SerialBT);
+
+TaskHandle_t Task_idle;
+
+static void Task_idle_code(void* pvParameters)
+{
+	for (;;)
+	{
+		vTaskDelay(10);
+		if (Serial.available())
+			command.run();
+    if (SerialBT.available())
+    {
+      commandBT.run();
+    }
+		esp_task_wdt_reset();
+		vTaskDelay(10);
+	}
+}
+
+TaskHandle_t Task_print_status;
+
+static void Task_print_status_code(void* pvParameters)
+{
+	for (;;)
+	{
+		vTaskDelay(1000);
+		Serial.printf("current is %f \t power req: %f \t volt: %f \n",
+			current_sense.getPhaseCurrents(),
+			target_hz,
+			motor.voltage_limit);
+		esp_task_wdt_reset();
+	}
+}
+
+static void printCurrent(char* cmd, Stream & serial) { serial.printf("current is %f\n", current_sense.getPhaseCurrents().a); }
+
+void doTarget(char* cmd, Commander& commander)
 {
 	float req_hz = 3;
-	command.scalar(&req_hz, cmd);
+	commander.scalar(&req_hz, cmd);
 	if (req_hz >= 0)
 	{
 		if (req_hz < 3)
@@ -48,37 +96,10 @@ void doTarget(char* cmd)
 	motor.voltage_limit = std::max(12.0f, std::min(driver.voltage_limit, volt_hz / motor_freq * motor_volt * 1.4f));
 }
 
-TaskHandle_t Task_idle;
-
-static void Task_idle_code(void* pvParameters)
-{
-	for (;;)
-	{
-		vTaskDelay(10);
-		command.run();
-		esp_task_wdt_reset();
-		vTaskDelay(10);
-	}
-}
-
-static void Task_print_status_code(void* pvParameters)
-{
-	for (;;)
-	{
-		vTaskDelay(1000);
-		Serial.printf("current is %f \t power req: %f \t volt: %f \n",
-			current_sense.getPhaseCurrents(),
-			target_hz,
-			motor.voltage_limit);
-		esp_task_wdt_reset();
-	}
-}
-
-static void printCurrent(char* cmd) { Serial.printf("current is %f\n", current_sense.getPhaseCurrents().a); }
-
 void setup()
 {
 	Serial.begin(250000);
+	SerialBT.begin("mini_VFD"); // Bluetooth device name
 
 	sensor.init();
 
@@ -113,8 +134,10 @@ void setup()
 	motor.init();
 
 	// add target command T
-	command.add('T', doTarget, "target hz");
-	command.add('C', printCurrent, "print current");
+	command.add('T', [](char* cmd){ doTarget(cmd, command); }, "target hz");
+	command.add('C', [](char* cmd){ printCurrent(cmd, Serial);}, "print current");
+	commandBT.add('T', [](char* cmd){ doTarget(cmd, commandBT); }, "target hz");
+	commandBT.add('C', [](char* cmd){ printCurrent(cmd, SerialBT);}, "print current");
 
 	Serial.println("Motor ready!");
 	Serial.println("Set target velocity [rad/s]");
@@ -134,7 +157,7 @@ void setup()
 		10000,										/* Stack size of task */
 		NULL,										/* parameter of the task */
 		1,											/* priority of the task */
-		&Task_idle,									/* Task handle to keep track of created task */
+		&Task_print_status,									/* Task handle to keep track of created task */
 		0);											/* pin task to core 0 */
 
 	_delay(100);
