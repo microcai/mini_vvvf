@@ -1,6 +1,6 @@
--I/home/cai/文档/PlatformIO/Projects/mini_vvvf/include
--I/home/cai/文档/PlatformIO/Projects/mini_vvvf/src
--I/home/cai/文档/PlatformIO/Projects/mini_vvvf/.pio/libdeps/esp32dev/Simple FOC/src
+-Iinclude
+-Isrc
+-I.pio/libdeps/esp32dev/Simple FOC/src
 -I/home/cai/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/newlib/platform_include
 -I/home/cai/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/freertos/include
 -I/home/cai/.platformio/packages/framework-arduinoespressif32/tools/sdk/esp32/include/freertos/include/esp_additions/freertos
