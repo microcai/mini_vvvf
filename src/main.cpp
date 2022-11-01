@@ -1,5 +1,4 @@
 
-#include <SimpleFOC.h>
 #include <Arduino.h>
 
 // #ifdef BOARD_VESC
@@ -26,7 +25,14 @@
 #include "esp32_pins.h"
 #endif
 
-#define Serial Serial4
+#ifdef BOARD_VESC
+//HardwareSerial uart_port(PC6, PC7);
+#define uart_port Serial
+#else
+#define uart_port Serial
+#endif
+
+#include <SimpleFOC.h>
 
 float calc_volt_from_herts(float hertz);
 
@@ -41,16 +47,16 @@ BLDCDriver3PWM driver = BLDCDriver3PWM(25, 26, 27, 33);
 // MagneticSensorI2C sensor = MagneticSensorI2C(AS5600_I2C);
 
 // BUG, LowsideCurrentSense crash with WiFi/BT
-// LowsideCurrentSense current_sense = LowsideCurrentSense(0.005f, 10, IOUTA, IOUTB, IOUTC);
+#ifdef HAS_LowCurrentSense
+LowsideCurrentSense current_sense = LowsideCurrentSense(0.005f, 10, IOUTA, IOUTB, IOUTC);
+#endif
 
 float pi = 3.14159265358979;
 // target variable
-float target_hz = 10;
+float target_hz = 7;
 
 float motor_volt = 100;
 float motor_freq = 140;
-
-//auto & Serial = Serial4;
 
 // instantiate the commander
 Commander command = Commander{};
@@ -69,7 +75,7 @@ static void Task_idle_code(void* pvParameters)
 	for (;;)
 	{
 		delay(10);
-		if (Serial.available())
+		if (uart_port.available())
 			command.run(Serial);
 #if defined(CONFIG_BT_ENABLED) && defined(CONFIG_BLUEDROID_ENABLED)
 		if (SerialBT.available())
@@ -89,7 +95,7 @@ static void Task_print_status_code(void* pvParameters)
 	for (;;)
 	{
 		delay(10);
-		Serial.printf("current is %fmA \t power freq: %fhz \t volt: %fV \n",
+		uart_port.printf("current is %fmA \t power freq: %fhz \t volt: %fV \n",
 			0.0f, // current_sense.getDCCurrent() * 1000.0f,
 			target_hz,
 			motor.voltage_limit);
@@ -135,12 +141,13 @@ void setup()
 	// 		_adc_channel_io_map[i][j] = adc_channel_io_map[i][j];
 	// 	}
 	// }
+#ifdef BOARD_VESC
+	SystemClock_Config();
+#endif
 
-	delay(500);
+	uart_port.begin(UART_BAUD_RATE);
 
-	Serial.begin(115200);
-
-	Serial.println("starting");
+	uart_port.println("starting");
 
 	// driver config
 	// power supply voltage [V]
@@ -149,24 +156,20 @@ void setup()
 	// as a protection measure for the low-resistance motors
 	// this value is fixed on startup
 	driver.voltage_limit = 24;
-	driver.pwm_frequency = 80000;
+	driver.pwm_frequency = 24000;
 	driver.init();
-	Serial.println("driver inited");
+	uart_port.println("driver inited");
 
-	// current_sense.linkDriver(&driver);
-
-	// current_sense.init();
-	Serial.println("current_senser inited");
-
+#ifdef HAS_LowCurrentSense
+	current_sense.linkDriver(&driver);
+	current_sense.init();
+	uart_port.println("current_senser inited");
 	// link the motor and the driver
-	motor.linkDriver(&driver);
-	// motor.linkCurrentSense(&current_sense);
-	Serial.println("current_senser linked");
+	motor.linkCurrentSense(&current_sense);
+	uart_port.println("current_senser linked");
+#endif
 
-	delay(30);
-	Serial.println("starting BT");
-	delay(30);
-	Serial.println("BT started");
+	motor.linkDriver(&driver);
 
 	// limiting motor movements
 	// limit the voltage to be set to the motor
@@ -180,15 +183,11 @@ void setup()
 
 	// init motor hardware;
 	motor.init();
-	Serial.println("motor inited");
-
 	// add target command T
 	command.add('T', doTarget, "target hz");
 
-	Serial.println("Motor ready!");
-	Serial.println("Set target velocity [rad/s]");
-
-	Serial.println("BT started");
+	uart_port.println("Motor ready!");
+	uart_port.println("Set target velocity [rad/s]");
 
 #ifndef BOARD_VESC
 
@@ -214,6 +213,7 @@ void setup()
 
 #if defined(CONFIG_BT_ENABLED) && defined(CONFIG_BLUEDROID_ENABLED)
 	SerialBT.begin("vfd");
+	uart_port.println("BT started");
 #endif
 	// xTaskCreatePinnedToCore([](void*) { SerialBT.begin("vfd"); vTaskDelete() }, /* Task function. */
 	// 	"start_bt",												  /* name of task. */
@@ -229,6 +229,7 @@ void loop()
 {
 	// open loop velocity movement
 	// using motor.voltage_limit and motor.velocity_limit
+	motor.loopFOC();
 	motor.move(target_hz * 2 * pi);
 	// user communication
 #ifdef BOARD_VESC
