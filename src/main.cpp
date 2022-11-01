@@ -265,6 +265,15 @@ auto circularBufferSum(const T& buf)
 	}
 	return s;
 }
+template<typename T>
+T clamp(T input, T min, T max)
+{
+	if (input >= max)
+		return max;
+	else if (input <= min)
+		return min;
+	return input;
+}
 
 void read_throttle()
 {
@@ -274,7 +283,7 @@ void read_throttle()
 		motor.disable();
 	else
 	{
-		set_motor_speed(input / (1024.0 - 260.0) * motor_freq);
+		set_motor_speed( ( clamp(input - 250, 0, 760)) / 760 * motor_freq);
 		if (!motor.enabled)
 			motor.enable();
 	}
