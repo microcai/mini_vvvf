@@ -1,10 +1,15 @@
 
 #include <Arduino.h>
+#include <CircularBuffer.h>
+#include <algorithm>
+#include <numeric>
 
-// #ifdef BOARD_VESC
-// #include <STM32FreeRTOS.h>
-// #define xTaskCreatePinnedToCore(a,b,c,d,e,f,g) xTaskCreate(a,b,c,d,e,f)
-// #endif
+#ifdef BOARD_VESC
+#ifdef ENABLE_THREADS
+#include <STM32FreeRTOS.h>
+#define xTaskCreatePinnedToCore(a, b, c, d, e, f, g) xTaskCreate(a, b, c, d, 0, f)
+#endif
+#endif
 #ifdef CONFIG_ESP_TASK_WDT
 #include <esp_task_wdt.h>
 #endif
@@ -26,7 +31,7 @@
 #endif
 
 #ifdef BOARD_VESC
-//HardwareSerial uart_port(PC6, PC7);
+// HardwareSerial uart_port(PC6, PC7);
 #define uart_port Serial
 #else
 #define uart_port Serial
@@ -38,25 +43,27 @@ float calc_volt_from_herts(float hertz);
 
 // BLDC motor & driver instance
 // BLDCMotor motor = BLDCMotor(pole pair number);
-BLDCMotor motor		  = BLDCMotor(1);
+BLDCMotor motor = BLDCMotor(1);
 #ifdef BOARD_VESC
 BLDCDriver6PWM driver(H1, L1, H2, L2, H3, L3, EN_GATE);
 #else
-BLDCDriver3PWM driver = BLDCDriver3PWM(25, 26, 27, 33);
+BLDCDriver3PWM driver			  = BLDCDriver3PWM(25, 26, 27, 33);
 #endif
 // MagneticSensorI2C sensor = MagneticSensorI2C(AS5600_I2C);
 
 // BUG, LowsideCurrentSense crash with WiFi/BT
-#ifdef HAS_LowCurrentSense
-LowsideCurrentSense current_sense = LowsideCurrentSense(0.005f, 10, IOUTA, IOUTB, IOUTC);
+#if defined(HAS_InlineCurrentSense)
+InlineCurrentSense current_sense = InlineCurrentSense(Shunt_Resistor, Sensor_GAIN, IOUTA, IOUTB, IOUTC);
+#elif defined(HAS_LowSideCurrentSense)
+LowsideCurrentSense current_sense = LowsideCurrentSense(Shunt_Resistor, Sensor_GAIN, IOUTA, IOUTB, IOUTC);
 #endif
 
 float pi = 3.14159265358979;
 // target variable
 float target_hz = 7;
 
-float motor_volt = 100;
-float motor_freq = 140;
+float motor_volt = 24;
+float motor_freq = 40;
 
 // instantiate the commander
 Commander command = Commander{};
@@ -65,8 +72,7 @@ Commander command = Commander{};
 BluetoothSerial SerialBT;
 #endif
 
-#ifndef BOARD_VESC
-
+#ifdef ENABLE_THREADS
 static TaskHandle_t Task_idle;
 static TaskHandle_t Task_print_status;
 
@@ -95,26 +101,17 @@ static void Task_print_status_code(void* pvParameters)
 	for (;;)
 	{
 		delay(10);
-		uart_port.printf("current is %fmA \t power freq: %fhz \t volt: %fV \n",
-			0.0f, // current_sense.getDCCurrent() * 1000.0f,
-			target_hz,
-			motor.voltage_limit);
+		print_status();
 		delay(10);
 #if defined(CONFIG_BT_ENABLED) && defined(CONFIG_BLUEDROID_ENABLED)
-		SerialBT.printf("current is %fmA \t power freq: %fhz \t volt: %fV \n",
-			0.0f, // current_sense.getDCCurrent() * 1000.0f,
-			target_hz,
-			motor.voltage_limit);
-#endif			
+		print_status(SerialBT);
+#endif
 	}
 }
-
 #endif
 
-void doTarget(char* cmd)
+static void set_motor_speed(float req_hz)
 {
-	float req_hz = 3;
-	command.scalar(&req_hz, cmd);
 	if (req_hz >= 0)
 	{
 		if (req_hz < 3)
@@ -130,6 +127,29 @@ void doTarget(char* cmd)
 		target_hz = req_hz;
 	float volt_hz		= std::abs(req_hz);
 	motor.voltage_limit = calc_volt_from_herts(volt_hz);
+}
+
+static void doTarget(char* cmd)
+{
+	float req_hz = 3;
+	command.scalar(&req_hz, cmd);
+	set_motor_speed(req_hz);
+}
+
+static void doVoltage(char* cmd)
+{
+	float req_voltage = 0;
+	command.scalar(&req_voltage, cmd);
+	if (req_voltage <= 0)
+	{
+		req_voltage = 0;
+		motor.disable();
+	}
+	else
+	{
+		motor.enable();
+		motor.voltage_limit = req_voltage;
+	}
 }
 
 void setup()
@@ -151,17 +171,20 @@ void setup()
 
 	// driver config
 	// power supply voltage [V]
-	driver.voltage_power_supply = 24;
+	driver.voltage_power_supply = 32;
 	// limit the maximal dc voltage the driver can set
 	// as a protection measure for the low-resistance motors
 	// this value is fixed on startup
-	driver.voltage_limit = 24;
-	driver.pwm_frequency = 24000;
+	driver.voltage_limit = 32;
+	driver.pwm_frequency = 48000;
 	driver.init();
 	uart_port.println("driver inited");
 
-#ifdef HAS_LowCurrentSense
+#ifdef HAS_LowSideCurrentSense
 	current_sense.linkDriver(&driver);
+#endif
+
+#if HAS_CurrentSense
 	current_sense.init();
 	uart_port.println("current_senser inited");
 	// link the motor and the driver
@@ -185,12 +208,12 @@ void setup()
 	motor.init();
 	// add target command T
 	command.add('T', doTarget, "target hz");
+	command.add('V', doVoltage, "target volt");
 
 	uart_port.println("Motor ready!");
-	uart_port.println("Set target velocity [rad/s]");
+	uart_port.println("Set target velocity [hz/s]");
 
-#ifndef BOARD_VESC
-
+#ifdef ENABLE_THREADS
 	xTaskCreatePinnedToCore(Task_idle_code, /* Task function. */
 		"idle_task",						/* name of task. */
 		10000,								/* Stack size of task */
@@ -206,7 +229,6 @@ void setup()
 		1,											/* priority of the task */
 		&Task_print_status,							/* Task handle to keep track of created task */
 		0);											/* pin task to core 0 */
-
 #endif
 
 	delay(30);
@@ -222,7 +244,60 @@ void setup()
 	// 	1,														  /* priority of the task */
 	// 	&Task_start_bt,											  /* Task handle to keep track of created task */
 	// 	0);														  /* pin task to core 0 */
-																  // SerialBT.begin("vfd");
+	// SerialBT.begin("vfd");
+
+//	vTaskStartScheduler();
+#ifdef HAS_throttle
+	pinMode(Throutle_PIN, INPUT_PULLDOWN);
+#endif
+}
+
+float filtered_current = 0.0f;
+
+template <typename T>
+auto circularBufferSum(const T& buf)
+{
+	using index_t = typename T::index_t;
+	auto s		  = buf[0];
+	for (index_t i = 1; i < buf.size(); i++)
+	{
+		s += buf[i];
+	}
+	return s;
+}
+
+void read_throttle()
+{
+	int input = analogRead(Throutle_PIN);
+
+	if (input <= 265)
+		motor.disable();
+	else
+	{
+		set_motor_speed(input / (1024.0 - 260.0) * motor_freq);
+		if (!motor.enabled)
+			motor.enable();
+	}
+}
+
+float calc_volt_from_herts(float hertz)
+{
+	return std::max(7.0f, std::min(driver.voltage_limit, hertz / motor_freq * motor_volt * 1.4f));
+}
+
+void print_status(Stream& serial_port)
+{
+	if (motor.enabled)
+	{
+		serial_port.printf("current is %dmA \t power freq: %dhz \t volt: %dV\n",
+			static_cast<int>(filtered_current * 1000.0f),
+			static_cast<int>(target_hz),
+			static_cast<int>(motor.voltage_limit));
+	}
+	else
+	{
+		serial_port.printf("motor stoped\n");
+	}
 }
 
 void loop()
@@ -231,13 +306,29 @@ void loop()
 	// using motor.voltage_limit and motor.velocity_limit
 	motor.loopFOC();
 	motor.move(target_hz * 2 * pi);
-	// user communication
-#ifdef BOARD_VESC
-	command.run(Serial);
-#endif
-}
+	static long start_micros = 0;
+	auto this_tp			 = micros();
 
-float calc_volt_from_herts(float hertz)
-{
-	return std::max(7.0f, std::min(driver.voltage_limit, hertz / motor_freq * motor_volt * 1.4f));
+#ifdef HAS_CurrentSense
+	CircularBuffer<float, 500> current_samples;
+
+	current_samples.push(current_sense.getDCCurrent());
+
+	filtered_current = circularBufferSum(current_samples) / current_samples.size();
+#endif
+
+	// user communication
+#ifndef ENABLE_THREADS
+	command.run(Serial);
+
+	if ((this_tp - start_micros) >= 1200000)
+	{
+		print_status(uart_port);
+		start_micros = this_tp;
+	}
+#endif
+
+#ifdef HAS_throttle
+	read_throttle();
+#endif
 }

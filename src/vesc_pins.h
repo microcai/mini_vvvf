@@ -61,4 +61,12 @@ void SystemClock_Config(void)
 #define IOUTB PC1
 #define IOUTC PC2
 
-#define HAS_LowCurrentSense 1
+// #define HAS_LowSideCurrentSense 1
+#define HAS_InlineCurrentSense 1
+#define HAS_CurrentSense 1
+
+#define Shunt_Resistor 0.05f
+#define Sensor_GAIN 10
+
+#define HAS_throttle 1
+#define Throutle_PIN PC5
