@@ -35,8 +35,8 @@ float pi = 3.14159265358979;
 // target variable
 float target_hz = 10;
 
-float motor_volt = 200;
-float motor_freq = 70;
+float motor_volt = 100;
+float motor_freq = 140;
 
 // instantiate the commander
 Commander command = Commander{};
@@ -72,11 +72,10 @@ static void Task_print_status_code(void* pvParameters)
 			target_hz,
 			motor.voltage_limit);
 		esp_task_wdt_reset();
-		if (SerialBT.availableForWrite())
-			SerialBT.printf("current is %fmA \t power freq: %fhz \t volt: %fV \n",
-				0.0f, // current_sense.getDCCurrent() * 1000.0f,
-				target_hz,
-				motor.voltage_limit);
+		SerialBT.printf("current is %fmA \t power freq: %fhz \t volt: %fV \n",
+			0.0f, // current_sense.getDCCurrent() * 1000.0f,
+			target_hz,
+			motor.voltage_limit);
 	}
 }
 
@@ -98,7 +97,7 @@ void doTarget(char* cmd)
 	else
 		target_hz = req_hz;
 	float volt_hz		= std::abs(req_hz);
-	motor.voltage_limit = calc_volt_from_herts(req_hz);
+	motor.voltage_limit = calc_volt_from_herts(volt_hz);
 }
 
 void setup()
@@ -122,7 +121,7 @@ void setup()
 	// as a protection measure for the low-resistance motors
 	// this value is fixed on startup
 	driver.voltage_limit = 24;
-	driver.pwm_frequency = 12000;
+	driver.pwm_frequency = 80000;
 	driver.init();
 	Serial.println("driver inited");
 
@@ -203,5 +202,5 @@ void loop()
 
 float calc_volt_from_herts(float hertz)
 {
-	return std::max(12.0f, std::min(driver.voltage_limit, hertz / motor_freq * motor_volt * 1.4f));
+	return std::max(7.0f, std::min(driver.voltage_limit, hertz / motor_freq * motor_volt * 1.4f));
 }
