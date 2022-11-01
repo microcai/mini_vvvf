@@ -2,10 +2,10 @@
 #include <SimpleFOC.h>
 #include <Arduino.h>
 
-#ifdef BOARD_VESC
-#include <STM32FreeRTOS.h>
-#define xTaskCreatePinnedToCore(a,b,c,d,e,f,g) xTaskCreate(a,b,c,d,e,f)
-#endif
+// #ifdef BOARD_VESC
+// #include <STM32FreeRTOS.h>
+// #define xTaskCreatePinnedToCore(a,b,c,d,e,f,g) xTaskCreate(a,b,c,d,e,f)
+// #endif
 #ifdef CONFIG_ESP_TASK_WDT
 #include <esp_task_wdt.h>
 #endif
@@ -20,17 +20,24 @@
 #endif
 #endif
 
-#define IOUTA 34
-#define IOUTB 35
-#define IOUTC 32
+#ifdef BOARD_VESC
+#include "vesc_pins.h"
+#else
+#include "esp32_pins.h"
+#endif
+
+#define Serial Serial4
 
 float calc_volt_from_herts(float hertz);
 
 // BLDC motor & driver instance
 // BLDCMotor motor = BLDCMotor(pole pair number);
 BLDCMotor motor		  = BLDCMotor(1);
+#ifdef BOARD_VESC
+BLDCDriver6PWM driver(H1, L1, H2, L2, H3, L3, EN_GATE);
+#else
 BLDCDriver3PWM driver = BLDCDriver3PWM(25, 26, 27, 33);
-
+#endif
 // MagneticSensorI2C sensor = MagneticSensorI2C(AS5600_I2C);
 
 // BUG, LowsideCurrentSense crash with WiFi/BT
@@ -43,6 +50,8 @@ float target_hz = 10;
 float motor_volt = 100;
 float motor_freq = 140;
 
+//auto & Serial = Serial4;
+
 // instantiate the commander
 Commander command = Commander{};
 
@@ -50,15 +59,16 @@ Commander command = Commander{};
 BluetoothSerial SerialBT;
 #endif
 
+#ifndef BOARD_VESC
+
 static TaskHandle_t Task_idle;
 static TaskHandle_t Task_print_status;
-static TaskHandle_t Task_start_bt;
 
 static void Task_idle_code(void* pvParameters)
 {
 	for (;;)
 	{
-		vTaskDelay(10);
+		delay(10);
 		if (Serial.available())
 			command.run(Serial);
 #if defined(CONFIG_BT_ENABLED) && defined(CONFIG_BLUEDROID_ENABLED)
@@ -70,7 +80,7 @@ static void Task_idle_code(void* pvParameters)
 #ifdef CONFIG_ESP_TASK_WDT
 		esp_task_wdt_reset();
 #endif
-		vTaskDelay(10);
+		delay(10);
 	}
 }
 
@@ -78,12 +88,12 @@ static void Task_print_status_code(void* pvParameters)
 {
 	for (;;)
 	{
-		vTaskDelay(1000);
+		delay(10);
 		Serial.printf("current is %fmA \t power freq: %fhz \t volt: %fV \n",
 			0.0f, // current_sense.getDCCurrent() * 1000.0f,
 			target_hz,
 			motor.voltage_limit);
-		vTaskDelay(10);
+		delay(10);
 #if defined(CONFIG_BT_ENABLED) && defined(CONFIG_BLUEDROID_ENABLED)
 		SerialBT.printf("current is %fmA \t power freq: %fhz \t volt: %fV \n",
 			0.0f, // current_sense.getDCCurrent() * 1000.0f,
@@ -92,6 +102,8 @@ static void Task_print_status_code(void* pvParameters)
 #endif			
 	}
 }
+
+#endif
 
 void doTarget(char* cmd)
 {
@@ -124,7 +136,9 @@ void setup()
 	// 	}
 	// }
 
-	Serial.begin(250000);
+	delay(500);
+
+	Serial.begin(115200);
 
 	Serial.println("starting");
 
@@ -149,9 +163,9 @@ void setup()
 	// motor.linkCurrentSense(&current_sense);
 	Serial.println("current_senser linked");
 
-	vTaskDelay(30);
+	delay(30);
 	Serial.println("starting BT");
-	vTaskDelay(30);
+	delay(30);
 	Serial.println("BT started");
 
 	// limiting motor movements
@@ -176,6 +190,8 @@ void setup()
 
 	Serial.println("BT started");
 
+#ifndef BOARD_VESC
+
 	xTaskCreatePinnedToCore(Task_idle_code, /* Task function. */
 		"idle_task",						/* name of task. */
 		10000,								/* Stack size of task */
@@ -192,7 +208,9 @@ void setup()
 		&Task_print_status,							/* Task handle to keep track of created task */
 		0);											/* pin task to core 0 */
 
-	vTaskDelay(30);
+#endif
+
+	delay(30);
 
 #if defined(CONFIG_BT_ENABLED) && defined(CONFIG_BLUEDROID_ENABLED)
 	SerialBT.begin("vfd");
@@ -213,6 +231,9 @@ void loop()
 	// using motor.voltage_limit and motor.velocity_limit
 	motor.move(target_hz * 2 * pi);
 	// user communication
+#ifdef BOARD_VESC
+	command.run(Serial);
+#endif
 }
 
 float calc_volt_from_herts(float hertz)
