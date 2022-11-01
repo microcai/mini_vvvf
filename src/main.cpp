@@ -1,18 +1,23 @@
 
-#include <BluetoothSerial.h>
 #include <SimpleFOC.h>
-#include <esp_task_wdt.h>
+#include <Arduino.h>
 
+#ifdef BOARD_VESC
+#include <STM32FreeRTOS.h>
+#define xTaskCreatePinnedToCore(a,b,c,d,e,f,g) xTaskCreate(a,b,c,d,e,f)
+#endif
+#ifdef CONFIG_ESP_TASK_WDT
+#include <esp_task_wdt.h>
+#endif
 // extern const int adc_channel_io_map[SOC_ADC_PERIPH_NUM][SOC_ADC_MAX_CHANNEL_NUM];
 
 // int IRAM_ATTR _adc_channel_io_map[SOC_ADC_PERIPH_NUM][SOC_ADC_MAX_CHANNEL_NUM];
 
-#if !defined(CONFIG_BT_ENABLED) || !defined(CONFIG_BLUEDROID_ENABLED)
-#error Bluetooth is not enabled! Please run `make menuconfig` to and enable it
-#endif
-
+#if defined(CONFIG_BT_ENABLED) && defined(CONFIG_BLUEDROID_ENABLED)
+#include <BluetoothSerial.h>
 #if !defined(CONFIG_BT_SPP_ENABLED)
 #error Serial Bluetooth not available or not enabled. It is only available for the ESP32 chip.
+#endif
 #endif
 
 #define IOUTA 34
@@ -40,7 +45,10 @@ float motor_freq = 140;
 
 // instantiate the commander
 Commander command = Commander{};
+
+#if defined(CONFIG_BT_ENABLED) && defined(CONFIG_BLUEDROID_ENABLED)
 BluetoothSerial SerialBT;
+#endif
 
 static TaskHandle_t Task_idle;
 static TaskHandle_t Task_print_status;
@@ -53,11 +61,15 @@ static void Task_idle_code(void* pvParameters)
 		vTaskDelay(10);
 		if (Serial.available())
 			command.run(Serial);
+#if defined(CONFIG_BT_ENABLED) && defined(CONFIG_BLUEDROID_ENABLED)
 		if (SerialBT.available())
 		{
 			command.run(SerialBT);
 		}
+#endif
+#ifdef CONFIG_ESP_TASK_WDT
 		esp_task_wdt_reset();
+#endif
 		vTaskDelay(10);
 	}
 }
@@ -71,11 +83,13 @@ static void Task_print_status_code(void* pvParameters)
 			0.0f, // current_sense.getDCCurrent() * 1000.0f,
 			target_hz,
 			motor.voltage_limit);
-		esp_task_wdt_reset();
+		vTaskDelay(10);
+#if defined(CONFIG_BT_ENABLED) && defined(CONFIG_BLUEDROID_ENABLED)
 		SerialBT.printf("current is %fmA \t power freq: %fhz \t volt: %fV \n",
 			0.0f, // current_sense.getDCCurrent() * 1000.0f,
 			target_hz,
 			motor.voltage_limit);
+#endif			
 	}
 }
 
@@ -180,8 +194,9 @@ void setup()
 
 	vTaskDelay(30);
 
+#if defined(CONFIG_BT_ENABLED) && defined(CONFIG_BLUEDROID_ENABLED)
 	SerialBT.begin("vfd");
-
+#endif
 	// xTaskCreatePinnedToCore([](void*) { SerialBT.begin("vfd"); vTaskDelete() }, /* Task function. */
 	// 	"start_bt",												  /* name of task. */
 	// 	10000,													  /* Stack size of task */
