@@ -93,6 +93,28 @@ static void Task_idle_code(void* pvParameters)
 		esp_task_wdt_reset();
 #endif
 		delay(10);
+
+#ifdef HAS_throttle
+		read_throttle();
+#endif
+
+	}
+}
+
+float filtered_current = 0.0f;
+
+void print_status(Stream& serial_port)
+{
+	if (motor.enabled)
+	{
+		serial_port.printf("current is %dmA \t power freq: %dhz \t volt: %dV\n",
+			static_cast<int>(filtered_current * 1000.0f),
+			static_cast<int>(target_hz),
+			static_cast<int>(motor.voltage_limit));
+	}
+	else
+	{
+		serial_port.printf("motor stoped\n");
 	}
 }
 
@@ -101,7 +123,7 @@ static void Task_print_status_code(void* pvParameters)
 	for (;;)
 	{
 		delay(10);
-		print_status();
+		print_status(uart_port);
 		delay(10);
 #if defined(CONFIG_BT_ENABLED) && defined(CONFIG_BLUEDROID_ENABLED)
 		print_status(SerialBT);
@@ -252,10 +274,8 @@ void setup()
 #endif
 }
 
-float filtered_current = 0.0f;
-
 template <typename T>
-auto circularBufferSum(const T& buf)
+auto circularBufferSum(const T& buf) -> decltype(buf[0])
 {
 	using index_t = typename T::index_t;
 	auto s		  = buf[0];
@@ -265,6 +285,7 @@ auto circularBufferSum(const T& buf)
 	}
 	return s;
 }
+
 template<typename T>
 T clamp(T input, T min, T max)
 {
@@ -275,6 +296,7 @@ T clamp(T input, T min, T max)
 	return input;
 }
 
+#ifdef HAS_throttle
 void read_throttle()
 {
 	int input = analogRead(Throutle_PIN);
@@ -288,25 +310,11 @@ void read_throttle()
 			motor.enable();
 	}
 }
+#endif
 
 float calc_volt_from_herts(float hertz)
 {
 	return std::max(7.0f, std::min(driver.voltage_limit, hertz / motor_freq * motor_volt * 1.4f));
-}
-
-void print_status(Stream& serial_port)
-{
-	if (motor.enabled)
-	{
-		serial_port.printf("current is %dmA \t power freq: %dhz \t volt: %dV\n",
-			static_cast<int>(filtered_current * 1000.0f),
-			static_cast<int>(target_hz),
-			static_cast<int>(motor.voltage_limit));
-	}
-	else
-	{
-		serial_port.printf("motor stoped\n");
-	}
 }
 
 void loop()
@@ -335,9 +343,10 @@ void loop()
 		print_status(uart_port);
 		start_micros = this_tp;
 	}
-#endif
-
 #ifdef HAS_throttle
 	read_throttle();
 #endif
+
+#endif
+
 }

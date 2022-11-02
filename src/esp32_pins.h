@@ -10,3 +10,5 @@
 
 #define Shunt_Resistor 0.005f
 #define Sensor_GAIN 10
+
+//#define HAS_throttle 
