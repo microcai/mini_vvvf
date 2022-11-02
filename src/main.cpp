@@ -72,6 +72,24 @@ Commander command = Commander{};
 BluetoothSerial SerialBT;
 #endif
 
+
+float filtered_current = 0.0f;
+
+void print_status(Stream& serial_port)
+{
+	if (motor.enabled)
+	{
+		serial_port.printf("current is %dmA \t power freq: %dhz \t volt: %dV\n",
+			static_cast<int>(filtered_current * 1000.0f),
+			static_cast<int>(target_hz),
+			static_cast<int>(motor.voltage_limit));
+	}
+	else
+	{
+		serial_port.printf("motor stoped\n");
+	}
+}
+
 #ifdef ENABLE_THREADS
 static TaskHandle_t Task_idle;
 static TaskHandle_t Task_print_status;
@@ -98,23 +116,6 @@ static void Task_idle_code(void* pvParameters)
 		read_throttle();
 #endif
 
-	}
-}
-
-float filtered_current = 0.0f;
-
-void print_status(Stream& serial_port)
-{
-	if (motor.enabled)
-	{
-		serial_port.printf("current is %dmA \t power freq: %dhz \t volt: %dV\n",
-			static_cast<int>(filtered_current * 1000.0f),
-			static_cast<int>(target_hz),
-			static_cast<int>(motor.voltage_limit));
-	}
-	else
-	{
-		serial_port.printf("motor stoped\n");
 	}
 }
 
