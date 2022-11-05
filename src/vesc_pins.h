@@ -69,4 +69,4 @@ void SystemClock_Config(void)
 #define Sensor_GAIN 10
 
 #define HAS_throttle 1
-#define Throutle_PIN PC5
+#define Throutle_PIN PA6

@@ -271,7 +271,7 @@ void setup()
 
 //	vTaskStartScheduler();
 #ifdef HAS_throttle
-	pinMode(Throutle_PIN, INPUT_PULLDOWN);
+	pinMode(Throutle_PIN, INPUT_ANALOG);
 #endif
 }
 
@@ -301,12 +301,16 @@ T clamp(T input, T min, T max)
 void read_throttle()
 {
 	int input = analogRead(Throutle_PIN);
+	//uart_port.printf("analogRead out %d\n", input);
 
-	if (input <= 265)
+	if (input <= 5)
+	{
+		set_motor_speed(0);
 		motor.disable();
+	}
 	else
 	{
-		set_motor_speed( ( clamp(input - 250, 0, 760)) / 760 * motor_freq);
+		set_motor_speed( ( clamp(input - 1.0f, 0.0f, 1024.0f)) / 1024.0 * motor_freq);
 		if (!motor.enabled)
 			motor.enable();
 	}
