@@ -60,7 +60,11 @@ LowsideCurrentSense current_sense = LowsideCurrentSense(Shunt_Resistor, Sensor_G
 
 float pi = 3.14159265358979;
 // target variable
-float target_hz = 7;
+#ifdef BOARD_VESC
+float target_hz = 0;
+#else
+float target_hz = 0;
+#endif
 
 float motor_volt = 24;
 float motor_freq = 40;
