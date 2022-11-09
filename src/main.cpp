@@ -17,38 +17,12 @@
 
 // int IRAM_ATTR _adc_channel_io_map[SOC_ADC_PERIPH_NUM][SOC_ADC_MAX_CHANNEL_NUM];
 
-#if defined(CONFIG_BT_ENABLED) && defined(CONFIG_BLUEDROID_ENABLED)
-#include <BluetoothSerial.h>
-#if !defined(CONFIG_BT_SPP_ENABLED)
-#error Serial Bluetooth not available or not enabled. It is only available for the ESP32 chip.
-#endif
-#endif
-
-#ifdef BOARD_VESC
-#include "vesc_pins.h"
-#else
-#include "esp32_pins.h"
-#endif
-
-#ifdef BOARD_VESC
-// HardwareSerial uart_port(PC6, PC7);
-#define uart_port Serial
-#else
-#define uart_port Serial
-#endif
+#include "board_conf.hpp"
 
 #include <SimpleFOC.h>
 
-float calc_volt_from_herts(float hertz);
+#include "global.hpp"
 
-// BLDC motor & driver instance
-// BLDCMotor motor = BLDCMotor(pole pair number);
-BLDCMotor motor = BLDCMotor(1);
-#ifdef BOARD_VESC
-BLDCDriver6PWM driver(H1, L1, H2, L2, H3, L3, EN_GATE);
-#else
-BLDCDriver3PWM driver			  = BLDCDriver3PWM(25, 26, 27, 33);
-#endif
 // MagneticSensorI2C sensor = MagneticSensorI2C(AS5600_I2C);
 
 // BUG, LowsideCurrentSense crash with WiFi/BT
@@ -69,12 +43,6 @@ float target_hz = 0;
 float motor_volt = 24;
 float motor_freq = 40;
 
-// instantiate the commander
-Commander command = Commander{};
-
-#if defined(CONFIG_BT_ENABLED) && defined(CONFIG_BLUEDROID_ENABLED)
-BluetoothSerial SerialBT;
-#endif
 
 
 float filtered_current = 0.0f;
@@ -103,23 +71,7 @@ static void Task_idle_code(void* pvParameters)
 	for (;;)
 	{
 		delay(10);
-		if (uart_port.available())
-			command.run(Serial);
-#if defined(CONFIG_BT_ENABLED) && defined(CONFIG_BLUEDROID_ENABLED)
-		if (SerialBT.available())
-		{
-			command.run(SerialBT);
-		}
-#endif
-#ifdef CONFIG_ESP_TASK_WDT
-		esp_task_wdt_reset();
-#endif
-		delay(10);
-
-#ifdef HAS_throttle
-		read_throttle();
-#endif
-
+		idle_iteration();
 	}
 }
 
@@ -128,7 +80,7 @@ static void Task_print_status_code(void* pvParameters)
 	for (;;)
 	{
 		delay(10);
-		print_status(uart_port);
+		print_status(Serial);
 		delay(10);
 #if defined(CONFIG_BT_ENABLED) && defined(CONFIG_BLUEDROID_ENABLED)
 		print_status(SerialBT);
@@ -192,34 +144,40 @@ void setup()
 	SystemClock_Config();
 #endif
 
-	uart_port.begin(UART_BAUD_RATE);
+	Serial.begin(UART_BAUD_RATE);
 
-	uart_port.println("starting");
+	Serial.println("starting");
+
+	setup_wifi();
 
 	// driver config
 	// power supply voltage [V]
-	driver.voltage_power_supply = 32;
+	driver->voltage_power_supply = 32;
 	// limit the maximal dc voltage the driver can set
 	// as a protection measure for the low-resistance motors
 	// this value is fixed on startup
-	driver.voltage_limit = 32;
-	driver.pwm_frequency = 48000;
-	driver.init();
-	uart_port.println("driver inited");
+	driver->voltage_limit = 32;
+	driver->pwm_frequency = 48000;
+	driver->init();
+	Serial.println("driver inited");
 
 #ifdef HAS_LowSideCurrentSense
 	current_sense.linkDriver(&driver);
 #endif
 
 #if HAS_CurrentSense
-	current_sense.init();
-	uart_port.println("current_senser inited");
-	// link the motor and the driver
+	current_sense.init(); // current_sense.driverSync(&driver); //已经包含在了init函数中，所以屏蔽。simpleFOC版本v2.2.2
+	#ifndef BOARD_VESC
+	current_sense.skip_align = true; // 对于ESP32drive可以跳过电流检测，同时增益乘以-1，也就是把这四行都打开，
+	current_sense.gain_a *= -1; // 在之前的simpleFOC版本中，是不需要乘以-1的，v2.2.2修改了底层代码，所以必须乘以-1
+	current_sense.gain_b *= -1;
+	current_sense.gain_c *= -1; // 这四行也可以都屏蔽了，通过代码检测电流增益。但是偶尔会检测错误
+	#endif
 	motor.linkCurrentSense(&current_sense);
-	uart_port.println("current_senser linked");
+	Serial.println("current_senser linked");
 #endif
 
-	motor.linkDriver(&driver);
+	motor.linkDriver(driver);
 
 	// limiting motor movements
 	// limit the voltage to be set to the motor
@@ -237,8 +195,8 @@ void setup()
 	command.add('T', doTarget, "target hz");
 	command.add('V', doVoltage, "target volt");
 
-	uart_port.println("Motor ready!");
-	uart_port.println("Set target velocity [hz/s]");
+	Serial.println("Motor ready!");
+	Serial.println("Set target velocity [hz/s]");
 
 #ifdef ENABLE_THREADS
 	xTaskCreatePinnedToCore(Task_idle_code, /* Task function. */
@@ -260,10 +218,8 @@ void setup()
 
 	delay(30);
 
-#if defined(CONFIG_BT_ENABLED) && defined(CONFIG_BLUEDROID_ENABLED)
-	SerialBT.begin("vfd");
-	uart_port.println("BT started");
-#endif
+	setup_bt();
+
 	// xTaskCreatePinnedToCore([](void*) { SerialBT.begin("vfd"); vTaskDelete() }, /* Task function. */
 	// 	"start_bt",												  /* name of task. */
 	// 	10000,													  /* Stack size of task */
@@ -279,28 +235,6 @@ void setup()
 #endif
 }
 
-template <typename T>
-auto circularBufferSum(const T& buf) -> decltype(buf[0])
-{
-	using index_t = typename T::index_t;
-	auto s		  = buf[0];
-	for (index_t i = 1; i < buf.size(); i++)
-	{
-		s += buf[i];
-	}
-	return s;
-}
-
-template<typename T>
-T clamp(T input, T min, T max)
-{
-	if (input >= max)
-		return max;
-	else if (input <= min)
-		return min;
-	return input;
-}
-
 #ifdef HAS_throttle
 void read_throttle()
 {
@@ -314,7 +248,7 @@ void read_throttle()
 	}
 	else
 	{
-		set_motor_speed( ( clamp(input - 1.0f, 0.0f, 1024.0f)) / 1024.0 * motor_freq);
+		set_motor_speed((clamp(input - 250, 0, 760)) / 760 * motor_freq);
 		if (!motor.enabled)
 			motor.enable();
 	}
@@ -323,7 +257,7 @@ void read_throttle()
 
 float calc_volt_from_herts(float hertz)
 {
-	return std::max(7.0f, std::min(driver.voltage_limit, hertz / motor_freq * motor_volt * 1.4f));
+	return std::max(7.0f, std::min(driver->voltage_limit, hertz / motor_freq * motor_volt * 1.4f));
 }
 
 void loop()
@@ -349,7 +283,7 @@ void loop()
 
 	if ((this_tp - start_micros) >= 1200000)
 	{
-		print_status(uart_port);
+		print_status(Serial);
 		start_micros = this_tp;
 	}
 #ifdef HAS_throttle
@@ -357,5 +291,4 @@ void loop()
 #endif
 
 #endif
-
 }
